@@ -1,12 +1,11 @@
 // Package timerdb provides a key/value store called a `timerdb.Map` that supports "aging out"
-// or expiration of its entries based on a timeout value set at `Map` creation.
-// Values are set and retrieved via `Set()` and `Get` methods, respectively. If an entry has
-// timed out, it is not retrievable.
-// Known restrictions include the following:
+// of its entries based on a defaultExpiration value set at `Map` creation.
+// Values are set and retrieved via `Set()` and `Get()` methods, respectively. If an entry has
+// timed out, it is not retrievable. Known restrictions include the following:
 //
 // - there is no way to iterate (range) over the contents of the `Map`.
 //
-// - using values that contain mutexes is not safe, as values may internally be copied.
+// - using values that contain mutexes is not safe, as values may be copied in the internal methods.
 package timerdb
 
 import (
@@ -15,30 +14,30 @@ import (
 )
 
 // mapEntry is a wrapper around a generic value V, adding
-// an expiration field.
+// an expiresAt field.
 type mapEntry[V any] struct {
-	expiration time.Time
-	v          V
+	expiresAt time.Time
+	v         V
 }
 
 // isExpired returns true if the expiration time of the mapEntry
 // has passed, otherwise false.
 func (me *mapEntry[V]) isExpired() bool {
-	return time.Now().After(me.expiration)
+	return time.Now().After(me.expiresAt)
 }
 
 // Map is a generic key/value store that expires entries after a
-// user-defined timeout period.
+// user-defined defaultExpiration period.
 type Map[K comparable, V any] struct {
-	timeout time.Duration
-	mu      sync.RWMutex
-	m       map[K]mapEntry[V]
+	defaultExpiration time.Duration
+	mu                sync.RWMutex
+	m                 map[K]mapEntry[V]
 }
 
 // New creates a new Map.
 func New[K comparable, V any](t time.Duration) *Map[K, V] {
 	m := map[K]mapEntry[V]{}
-	return &Map[K, V]{m: m, timeout: t}
+	return &Map[K, V]{m: m, defaultExpiration: t}
 }
 
 // Get gets a value by key from a Map along with a boolean indicating
@@ -55,13 +54,12 @@ func (m *Map[K, V]) Get(k K) (V, bool) {
 	return me.v, true
 }
 
-// Set sets a key/value pair in a map along with a timeout if it does not already exist.
-// If the entry exists, Set() will reset the timer value.
+// Set sets a key/value pair in a map (along with a defaultExpiration) if it
+// does not already exist. If the entry exists, Set() will reset the timer value.
 func (m *Map[K, V]) Set(k K, v V) {
-	expires := time.Now().Add(m.timeout)
 	m.mu.Lock()
-	m.m[k] = mapEntry[V]{v: v, expiration: expires}
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	m.m[k] = mapEntry[V]{v: v, expiresAt: time.Now().Add(m.defaultExpiration)}
 }
 
 // Delete deletes an entry from a Map given its key. If the key does not
@@ -80,29 +78,35 @@ func (m *Map[K, V]) Delete(k K) bool {
 // SetExpiration sets a custom expiration time for a Map entry given its key. If
 // the key does not exist in the Map, the function returns false and does nothing.
 func (m *Map[K, V]) SetExpiration(k K, expires time.Time) bool {
-	m.mu.RLock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	v, found := m.m[k]
-	m.mu.RUnlock()
 	if !found {
 		return false
 	}
-	v.expiration = expires
-	m.mu.Lock()
+	v.expiresAt = expires
 	m.m[k] = v
-	m.mu.Unlock()
 	return true
 }
 
-// Reset resets the timeout for a Map entry given its key. If the key
+// Reset resets the expiration for a Map entry given its key. If the key
 // does not exist in the Map, the function returns false and does nothing.
 func (m *Map[K, V]) Reset(k K) bool {
-	return m.SetExpiration(k, time.Now().Add(m.timeout))
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, found := m.m[k]
+	if !found {
+		return false
+	}
+	v.expiresAt = time.Now().Add(m.defaultExpiration)
+	m.m[k] = v
+	return true
 }
 
 // Purge deletes all expired entries from the Map and returns
 // the number of deleted entries.
 // Purge should be called sparingly as it locks the Map
-// while it iterates over it.
+// for the duration of the iteration.
 func (m *Map[K, V]) Purge() int {
 	var i int
 	m.mu.Lock()
@@ -114,4 +118,18 @@ func (m *Map[K, V]) Purge() int {
 		}
 	}
 	return i
+}
+
+// Dump returns a standard map containing the unexpired
+// values within the Map.
+func (m *Map[K, V]) Dump() map[K]V {
+	dumpm := map[K]V{}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, v := range m.m {
+		if !v.isExpired() {
+			dumpm[k] = v.v
+		}
+	}
+	return dumpm
 }
