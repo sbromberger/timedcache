@@ -1,4 +1,4 @@
-// Package timedcache provides a key/value store called a `timedcache.Map` that supports "aging out"
+// Package timedmap provides a key/value store called a `timedmap.Map` that supports "aging out"
 // of its entries based on a defaultExpiration value set at `Map` creation.
 // Values are set and retrieved via `Set()` and `Get()` methods, respectively. If an entry has
 // timed out, it is not retrievable. Known restrictions include the following:
@@ -6,7 +6,7 @@
 // - there is no way to iterate (range) over the contents of the `Map`.
 //
 // - using values that contain mutexes is not safe, as values may be copied in the internal methods.
-package timedcache
+package timedmap
 
 import (
 	"sync"
