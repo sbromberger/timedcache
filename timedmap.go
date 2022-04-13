@@ -20,10 +20,16 @@ type mapEntry[V any] struct {
 	v         V
 }
 
+// isExpiredAsOf returns true if the expiration time of the mapEntry
+// has exceeded the time provided, otherwise false.
+func (me *mapEntry[V]) isExpiredAsOf(t time.Time) bool {
+	return t.After(me.expiresAt)
+}
+
 // isExpired returns true if the expiration time of the mapEntry
 // has passed, otherwise false.
 func (me *mapEntry[V]) isExpired() bool {
-	return time.Now().After(me.expiresAt)
+	return me.isExpiredAsOf(time.Now())
 }
 
 // Map is a generic key/value store that expires entries after a
@@ -111,8 +117,9 @@ func (m *Map[K, V]) Purge() int {
 	var i int
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	t := time.Now()
 	for k, v := range m.m {
-		if v.isExpired() {
+		if v.isExpiredAsOf(t) {
 			i++
 			delete(m.m, k)
 		}
@@ -126,8 +133,9 @@ func (m *Map[K, V]) Dump() map[K]V {
 	dumpm := map[K]V{}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	t := time.Now()
 	for k, v := range m.m {
-		if !v.isExpired() {
+		if !v.isExpiredAsOf(t) {
 			dumpm[k] = v.v
 		}
 	}
